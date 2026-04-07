@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 
+import json
 import pandas as pd
 import streamlit as st
 import torch
@@ -11,6 +12,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipe
 
 MODEL_DIR = Path(__file__).resolve().parent.parent / "model"
 MAX_LENGTH = 128
+LABELS_PATH = MODEL_DIR / "labels.json"
 
 
 @st.cache_resource(show_spinner=False)
@@ -21,12 +23,13 @@ def load_classifier():
         MODEL_DIR, local_files_only=True
     )
     model.eval()
-    return pipeline(
+    clf = pipeline(
         "text-classification",
         model=model,
         tokenizer=tokenizer,
         return_all_scores=True,
     )
+    return clf, model.config.num_labels
 
 
 def normalize_text(title: str, abstract: str) -> str:
@@ -49,10 +52,10 @@ def top_95(scores: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return picked
 
 
-def format_results(scores: List[Dict[str, Any]]) -> pd.DataFrame:
+def format_results(scores: List[Dict[str, Any]], label_map: Dict[str, str]) -> pd.DataFrame:
     rows = [
         {
-            "topic": item["label"],
+            "topic": label_map.get(str(item["label"]), str(item["label"])),
             "probability": round(float(item["score"]) * 100, 2),
         }
         for item in scores
@@ -60,9 +63,10 @@ def format_results(scores: List[Dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def get_top1(scores: List[Dict[str, Any]]) -> Tuple[str, float]:
+def get_top1(scores: List[Dict[str, Any]], label_map: Dict[str, str]) -> Tuple[str, float]:
     best = max(scores, key=lambda item: item["score"])
-    return best["label"], float(best["score"])
+    label = label_map.get(str(best["label"]), str(best["label"]))
+    return label, float(best["score"])
 
 
 st.set_page_config(page_title="PaperScope", page_icon="📚", layout="wide")
@@ -102,6 +106,12 @@ with left:
         )
         submitted = st.form_submit_button("Классифицировать")
 
+label_map = {}
+if LABELS_PATH.exists():
+    with LABELS_PATH.open("r", encoding="utf-8") as handle:
+        names = json.load(handle)
+    label_map = {str(i): name for i, name in enumerate(names)}
+
 if submitted:
     text = normalize_text(title_input, abstract_input)
     if not text:
@@ -109,8 +119,13 @@ if submitted:
         st.stop()
 
     with st.spinner("Считаем вероятности тем..."):
-        classifier = load_classifier()
-        scores = classifier(text, truncation=True, max_length=MAX_LENGTH)
+        classifier, num_labels = load_classifier()
+        scores = classifier(
+            text,
+            truncation=True,
+            max_length=MAX_LENGTH,
+            top_k=None,
+        )
 
 
     if isinstance(scores, dict):
@@ -119,8 +134,8 @@ if submitted:
         scores = scores[0]
 
     top_scores = top_95(scores)
-    result_df = format_results(top_scores)
-    top_label, top_score = get_top1(scores)
+    result_df = format_results(top_scores, label_map)
+    top_label, top_score = get_top1(scores, label_map)
 
     st.subheader("Тематики (top-95%)")
     st.dataframe(result_df, use_container_width=True, hide_index=True)
