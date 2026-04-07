@@ -1,4 +1,4 @@
-FROM python:3.13.5-slim
+FROM python:3.11-slim
 
 WORKDIR /app
 
@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt ./
 COPY src/ ./src/
 
-RUN pip3 install -r requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 EXPOSE 8501
 

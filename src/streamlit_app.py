@@ -1,40 +1,132 @@
-import altair as alt
-import numpy as np
+from __future__ import annotations
+
+from pathlib import Path
+from typing import List, Dict, Any, Tuple
+
 import pandas as pd
 import streamlit as st
+import torch
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
 
-"""
-# Welcome to Streamlit!
 
-Edit `/streamlit_app.py` to customize this app to your heart's desire :heart:.
-If you have any questions, checkout our [documentation](https://docs.streamlit.io) and [community
-forums](https://discuss.streamlit.io).
+MODEL_DIR = Path(__file__).resolve().parent.parent / "model"
+MAX_LENGTH = 128
 
-In the meantime, below is an example of what you can do with just a few lines of code:
-"""
 
-num_points = st.slider("Number of points in spiral", 1, 10000, 1100)
-num_turns = st.slider("Number of turns in spiral", 1, 300, 31)
+@st.cache_resource(show_spinner=False)
+def load_classifier():
+    torch.set_num_threads(1)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR, local_files_only=True)
+    model = AutoModelForSequenceClassification.from_pretrained(
+        MODEL_DIR, local_files_only=True
+    )
+    model.eval()
+    return pipeline(
+        "text-classification",
+        model=model,
+        tokenizer=tokenizer,
+        return_all_scores=True,
+    )
 
-indices = np.linspace(0, 1, num_points)
-theta = 2 * np.pi * num_turns * indices
-radius = indices
 
-x = radius * np.cos(theta)
-y = radius * np.sin(theta)
+def normalize_text(title: str, abstract: str) -> str:
+    title = title.strip()
+    abstract = abstract.strip()
+    if title and abstract:
+        return f"{title}\n\n{abstract}"
+    return title or abstract
 
-df = pd.DataFrame({
-    "x": x,
-    "y": y,
-    "idx": indices,
-    "rand": np.random.randn(num_points),
-})
 
-st.altair_chart(alt.Chart(df, height=700, width=700)
-    .mark_point(filled=True)
-    .encode(
-        x=alt.X("x", axis=None),
-        y=alt.Y("y", axis=None),
-        color=alt.Color("idx", legend=None, scale=alt.Scale()),
-        size=alt.Size("rand", legend=None, scale=alt.Scale(range=[1, 150])),
-    ))
+def top_95(scores: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    ordered = sorted(scores, key=lambda item: item["score"], reverse=True)
+    picked = []
+    total = 0.0
+    for item in ordered:
+        picked.append(item)
+        total += float(item["score"])
+        if total >= 0.95:
+            break
+    return picked
+
+
+def format_results(scores: List[Dict[str, Any]]) -> pd.DataFrame:
+    rows = [
+        {
+            "topic": item["label"],
+            "probability": round(float(item["score"]) * 100, 2),
+        }
+        for item in scores
+    ]
+    return pd.DataFrame(rows)
+
+
+def get_top1(scores: List[Dict[str, Any]]) -> Tuple[str, float]:
+    best = max(scores, key=lambda item: item["score"])
+    return best["label"], float(best["score"])
+
+
+st.set_page_config(page_title="PaperScope", page_icon="📚", layout="wide")
+
+st.markdown(
+    """
+    <style>
+    .main-title { font-size: 2.2rem; font-weight: 700; margin-bottom: 0.1rem; }
+    .subtitle { color: #5b5b5b; margin-bottom: 1.2rem; }
+    .metric-box { padding: 0.5rem 0.75rem; border-radius: 0.6rem; background: #f6f7fb; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown('<div class="main-title">PaperScope</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="subtitle">Классификация статей по тематикам arXiv</div>',
+    unsafe_allow_html=True,
+)
+
+left, right = st.columns([2, 1], gap="large")
+
+with left:
+    st.write(
+        "Введите название и/или аннотацию статьи. "
+        "Модель вернет темы по убыванию вероятности, пока сумма не превысит 95%."
+    )
+    with st.form("paper_form"):
+        title_input = st.text_input(
+            "Название статьи", placeholder="Attention Is All You Need"
+        )
+        abstract_input = st.text_area(
+            "Аннотация",
+            placeholder="We propose a new simple network architecture, the Transformer...",
+            height=180,
+        )
+        submitted = st.form_submit_button("Классифицировать")
+
+if submitted:
+    text = normalize_text(title_input, abstract_input)
+    if not text:
+        st.warning("Введите название статьи и/или аннотацию.")
+        st.stop()
+
+    with st.spinner("Считаем вероятности тем..."):
+        classifier = load_classifier()
+        scores = classifier(text, truncation=True, max_length=MAX_LENGTH)[0]
+
+    top_scores = top_95(scores)
+    result_df = format_results(top_scores)
+    top_label, top_score = get_top1(scores)
+
+    st.subheader("Тематики (top-95%)")
+    st.dataframe(result_df, use_container_width=True, hide_index=True)
+    st.bar_chart(result_df.set_index("topic"))
+    st.markdown(
+        f'<div class="metric-box">Топ‑1: <b>{top_label}</b> '
+        f'({top_score * 100:.2f}%)</div>',
+        unsafe_allow_html=True,
+    )
+
+with st.expander("Как считается top-95%"):
+    st.write(
+        "Темы сортируются по убыванию вероятности, затем добавляются в ответ до тех пор, "
+        "пока сумма вероятностей не превысит 95%."
+    )
