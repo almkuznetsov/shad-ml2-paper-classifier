@@ -110,7 +110,13 @@ if submitted:
 
     with st.spinner("Считаем вероятности тем..."):
         classifier = load_classifier()
-        scores = classifier(text, truncation=True, max_length=MAX_LENGTH)[0]
+        scores = classifier(text, truncation=True, max_length=MAX_LENGTH)
+
+
+    if isinstance(scores, dict):
+        scores = [scores]
+    elif isinstance(scores, list) and scores and isinstance(scores[0], list):
+        scores = scores[0]
 
     top_scores = top_95(scores)
     result_df = format_results(top_scores)
