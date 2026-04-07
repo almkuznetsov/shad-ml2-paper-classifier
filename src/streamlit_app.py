@@ -69,7 +69,7 @@ def get_top1(scores: List[Dict[str, Any]], label_map: Dict[str, str]) -> Tuple[s
     return label, float(best["score"])
 
 
-st.set_page_config(page_title="PaperScope", page_icon="📚", layout="wide")
+st.set_page_config(page_title="Paper Classifier", layout="wide")
 
 st.markdown(
     """
@@ -82,7 +82,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.markdown('<div class="main-title">PaperScope</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">Paper Classifier</div>', unsafe_allow_html=True)
 st.markdown(
     '<div class="subtitle">Классификация статей по тематикам arXiv</div>',
     unsafe_allow_html=True,
